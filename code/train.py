@@ -19,12 +19,12 @@ from random import shuffle
 
 
 # ─── Training Hyperparameters ──────────────────────────────────────────────────
-STAGE1_EPOCHS = 5
+STAGE1_EPOCHS = 60
 STAGE1_LR = 1e-4
-STAGE1_BATCH = 6
+STAGE1_BATCH = 64
 STAGE1_DECAY = 0.96
 
-STAGE2_EPOCHS = 5
+STAGE2_EPOCHS = 40
 STAGE2_LR = 1e-5
 STAGE2_BATCH = 4
 STAGE2_DECAY = 0.98
@@ -217,46 +217,52 @@ def train_stage2(net, writer, data_path_root, out_weight_folder,
             mesh_path = os.path.join(train_data_path, train_file)
             frame_num = len([f for f in listdir(mesh_path + "/1/") if f.startswith("x_")]) - 1
             dataset = data_loader.MeshDataset(mesh_path, train_seq_num, frame_num)
-            loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=2)
+            loader = DataLoader(dataset, batch_size=STAGE2_BATCH, shuffle=True, num_workers=2)
 
             adj = dataset.adj_matrix
             if torch.cuda.is_available():
                 adj = adj.cuda()
             ms_edges = build_multiscale_edges(adj, NUM_SCALES)
 
-            for constraint, dyn, ref, adj_mat, stiff, mass_val, gt in loader:
-                # Unbatch (B=1)
-                constraint = constraint[0]
-                dyn = dyn[0]       # (T+1, V, 3)
-                ref = ref[0]       # (T+1, V, 3)
-                stiff = stiff[0]   # (V, 1)
-                mass_val = mass_val[0]  # (V, 1)
-
-                if torch.cuda.is_available():
-                    constraint = constraint.cuda()
-                    dyn, ref = dyn.cuda(), ref.cuda()
-                    stiff, mass_val = stiff.cuda(), mass_val.cuda()
-
-                # K-step rollout
-                preds = rollout_k_steps(
-                    net, constraint, dyn, ref,
-                    adj_mat[0] if adj_mat.dim() > 2 else adj_mat,
-                    stiff, mass_val, ms_edges, K)
-
-                # Accumulate physics loss over K steps
-                total_phys_loss = 0.0
-                x_prev = dyn[1, :, :]  # t-1 positions
-                x_curr = dyn[0, :, :]  # t positions
-                for x_next in preds:
-                    step_loss = physics_loss_fn(x_next, x_curr, x_prev, mass_val)
-                    total_phys_loss = total_phys_loss + step_loss
-                    x_prev = x_curr
-                    x_curr = x_next
-
+            for constraint, dyn_batch, ref_batch, adj_mat, stiff_batch, mass_batch, gt in loader:
+                B = dyn_batch.shape[0]
                 optimizer.zero_grad()
-                total_phys_loss.backward()
+                batch_loss = 0.0
+
+                for b in range(B):
+                    constraint_b = constraint[0]
+                    dyn = dyn_batch[b]       # (T+1, V, 3)
+                    ref = ref_batch[b]       # (T+1, V, 3)
+                    stiff = stiff_batch[b]   # (V, 1)
+                    mass_val = mass_batch[b]  # (V, 1)
+
+                    if torch.cuda.is_available():
+                        constraint_b = constraint_b.cuda()
+                        dyn, ref = dyn.cuda(), ref.cuda()
+                        stiff, mass_val = stiff.cuda(), mass_val.cuda()
+
+                    # K-step rollout
+                    preds = rollout_k_steps(
+                        net, constraint_b, dyn, ref,
+                        adj_mat[0] if adj_mat.dim() > 2 else adj_mat,
+                        stiff, mass_val, ms_edges, K)
+
+                    # Accumulate physics loss over K steps
+                    total_phys_loss = 0.0
+                    x_prev = dyn[1, :, :]  # t-1 positions
+                    x_curr = dyn[0, :, :]  # t positions
+                    for x_next in preds:
+                        step_loss = physics_loss_fn(x_next, x_curr, x_prev, mass_val)
+                        total_phys_loss = total_phys_loss + step_loss
+                        x_prev = x_curr
+                        x_curr = x_next
+
+                    # Accumulate gradients across batch
+                    (total_phys_loss / B).backward()
+                    batch_loss += total_phys_loss.item()
+
                 optimizer.step()
-                train_loss_sum += total_phys_loss.item()
+                train_loss_sum += batch_loss / B
                 train_count += 1
 
         avg_loss = train_loss_sum / max(train_count, 1)

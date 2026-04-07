@@ -154,15 +154,18 @@ The displacement increment for unconstrained vertices ($c_i = 0$) is predicted b
     \Delta u_i(t) = F_\theta\!\big([h_t^{\mathrm{cur}}(i);\; c_t(i)]\big),
 \end{equation}
 where $F_\theta$ is a 5-layer MLP with Tanh activations (dimensions $256 \to 256 \to 256 \to 128 \to 3$). The secondary displacement and deformed position are then updated as:
-\begin{equation}\label{eq:update}
-    u_i(t+1) = u_i(t) + \Delta u_i(t), \qquad y_i(t+1) = x^{\mathrm{ref}}_{t+1}(i) + u_i(t+1).
-\end{equation}
+\begin{align}\label{eq:update}
+    u_i(t\!+\!1) &= u_i(t) + \Delta u_i(t), \notag\\
+    y_i(t\!+\!1) &= x^{\mathrm{ref}}_{t+1}(i) + u_i(t\!+\!1).
+\end{align}
 
 For constrained vertices ($c_i = 1$), the secondary displacement is not predicted; instead, we set $u_i(t+1) = 0$ so that $y_i(t+1) = x^{\mathrm{ref}}_{t+1}(i)$.
 
 Compared to the original Deep Emulator~\cite{zheng2021deep}, which uses
 \begin{equation}
-    \Delta u_i^{\mathrm{DE}}(t) = F_{\mathrm{DE}}\!\big(u(t), \dot{u}(t), \ddot{u}(t),\; x^{\mathrm{ref}}(t), \dot{x}^{\mathrm{ref}}(t), \ddot{x}^{\mathrm{ref}}(t),\; m, \kappa\big),
+    \Delta u_i^{\mathrm{DE}}(t) = F_{\mathrm{DE}}\!\big(u, \dot{u}, \ddot{u},\;
+    x^{\mathrm{ref}}, \dot{x}^{\mathrm{ref}}, \ddot{x}^{\mathrm{ref}},\;
+    m, \kappa\big)\big|_{t},
 \end{equation}
 our formulation augments the dynamics function with the causally-gated spatiotemporal context $c_t(i)$, enabling the model to capture long-range influence propagation that the original single-frame local architecture cannot represent.
 
@@ -183,7 +186,7 @@ We adopt a two-stage hybrid training strategy: Stage~1 pre-trains the model with
     \mathcal{L}_{\mathrm{sup}} = \frac{1}{N_{\mathrm{free}}} \sum_{\{i:\,c_i=0\}} \left\| \Delta u_i^{\mathrm{pred}}(t) - \Delta u_i^{\mathrm{gt}}(t) \right\|_2^2.
 \end{equation}
 
-We train for 60 epochs with the Adam optimiser (initial learning rate $10^{-4}$, exponential decay factor 0.96 per epoch, batch size 48).
+We train for 60 epochs with the Adam optimiser (initial learning rate $10^{-4}$, exponential decay factor 0.96 per epoch, batch size 64).
 
 %-----------------------------------------------------------------------
 \subsection{Stage 2: Self-Supervised Physics Fine-tuning}
@@ -192,10 +195,10 @@ We train for 60 epochs with the Adam optimiser (initial learning rate $10^{-4}$,
 \subsubsection{Position Recovery}
 
 Given the predicted displacement increment $\Delta \hat{u}_i(t)$, the predicted deformed position at the next frame is recovered as:
-\begin{equation}\label{eq:pos_recovery}
-    \hat{u}_i(t+1) = u_i(t) + \Delta\hat{u}_i(t), \qquad
-    \hat{y}_i(t+1) = x^{\mathrm{ref}}_{t+1}(i) + \hat{u}_i(t+1),
-\end{equation}
+\begin{align}\label{eq:pos_recovery}
+    \hat{u}_i(t\!+\!1) &= u_i(t) + \Delta\hat{u}_i(t), \notag\\
+    \hat{y}_i(t\!+\!1) &= x^{\mathrm{ref}}_{t+1}(i) + \hat{u}_i(t\!+\!1),
+\end{align}
 where $x^{\mathrm{ref}}_{t+1}(i)$ is the known reference position at frame $t+1$. For constrained vertices, $\hat{u}_i(t+1) = 0$ and $\hat{y}_i(t+1) = x^{\mathrm{ref}}_{t+1}(i)$.
 
 \subsubsection{Physics Energy Loss}
@@ -222,9 +225,11 @@ where $g = 9.81\;\mathrm{m/s^2}$ and $y_t^{(y)}$ denotes the vertical (upward) c
     \mathcal{L}_{\mathrm{strain}} = \sum_{e=1}^{n_{\mathrm{el}}} \Psi(\mathbf{F}^e)\, v^e,
 \end{equation}
 where the strain energy density is
-\begin{equation}
-    \Psi = \tfrac{1}{2}\lambda(\log|\det\mathbf{F}|)^2 - \mu\log|\det\mathbf{F}| + \tfrac{1}{2}\mu\big(\mathrm{tr}(\mathbf{F}^\top\mathbf{F}) - 3\big),
-\end{equation}
+\begin{multline}
+    \Psi = \tfrac{1}{2}\lambda(\log|\!\det\mathbf{F}|)^2
+    - \mu\log|\!\det\mathbf{F}| \\
+    + \tfrac{1}{2}\mu\big(\mathrm{tr}(\mathbf{F}^\top\!\mathbf{F}) - 3\big),
+\end{multline}
 $\mathbf{F}^e = \mathbf{D}_s^e (\mathbf{D}_m^e)^{-1}$ is the deformation gradient of element $e$, $v^e$ is the rest volume, and $\lambda, \mu$ are the Lam\'{e} parameters.
 
 \subsubsection{Progressive $K$-Step Rollout}
@@ -246,7 +251,7 @@ The overall Stage~2 objective is:
     \min_\theta\; \mathbb{E}\!\left[\mathcal{L}_{\mathrm{phys}}^{(K)}\right].
 \end{equation}
 
-Stage~2 runs for 40 epochs with the Adam optimiser (initial learning rate $10^{-5}$, decay factor 0.98, batch size 1 due to the rollout memory cost).
+Stage~2 runs for 40 epochs with the Adam optimiser (initial learning rate $10^{-5}$, decay factor 0.98, batch size 4).
 
 %-----------------------------------------------------------------------
 \bibliographystyle{plain}
