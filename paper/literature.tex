@@ -1,0 +1,163 @@
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+
+\title{Causal Spatiotemporal Deep Emulator\\for Character Secondary Motion}
+\author{}
+\date{}
+
+\begin{document}
+
+%=======================================================================
+\section{Related Work}
+\label{sec:related}
+%=======================================================================
+
+%-----------------------------------------------------------------------
+\subsection{Character Secondary Motion and Neural Deformation Emulation}
+%-----------------------------------------------------------------------
+
+\paragraph{Deep Emulator.}
+Zheng et al.~\cite{zheng2021deep} introduced the first neural emulator for character secondary motion, predicting one-step displacement increments from per-vertex displacements, velocities, accelerations, and material parameters via a graph network on the mesh adjacency. Deep Emulator established the task formulation and evaluation protocol that subsequent work builds upon. However, it relies on single-frame local features within a fixed 1-ring neighbourhood, limiting its capacity for long-range spatial interactions and extended temporal context.
+
+\paragraph{MSEA-MGN.}
+Wang and Liu~\cite{wang2024msea} addressed both architectural and training limitations of Deep Emulator. They construct nested multi-scale edge sets on the same vertex set---expanding the spatial receptive field without explicit pooling---and replace ground-truth supervision with physics-based energy minimisation (inertia, gravity, strain energy). MSEA-MGN is the current state of the art and the closest baseline to our work. We inherit its multi-scale edge philosophy and energy-based training, but extend it with causal-cone masking that couples admissible spatial scale to temporal delay, plus a two-stage hybrid training curriculum.
+
+\paragraph{Adjacent deformation methods.}
+Several related approaches target nearby problems. Dalton et al.~\cite{dalton2023softtissue} use physics-informed GNNs with coarse multi-layer graphs for soft-tissue mechanics. Wang and Liu~\cite{wang2025hierarchical} propose hierarchical neural skinning with self-supervised physical energy terms. Wang et al.~\cite{wang2024apparel} model cloth via temporal vertex residual fields for motion transfer. Alternative paradigms include spring-based secondary animation~\cite{akyurek2025spring} and reduced-subspace methods using skinning eigenmodes~\cite{benchekroun2023eigenmodes}. These methods share components with our approach (multi-scale representations, physics losses, temporal history) but none enforces a spatiotemporal causal-cone constraint.
+
+%-----------------------------------------------------------------------
+\subsection{Causal-Cone and Delay-Aware Spatiotemporal Modelling}
+%-----------------------------------------------------------------------
+
+The physical principle underlying our method---that mechanical influence propagates at finite speed, so long-range spatial interactions should only become relevant after sufficient temporal delay---has been formalised in several adjacent fields.
+
+In the spatiotemporal prediction literature, Goerg and Shalizi~\cite{goerg2012licors,goerg2013mixed} showed that the past light cone is the fundamental sufficient statistic for local forecasting, decomposing global fields into local cone-shaped prediction problems. Rupe and Crutchfield~\cite{rupe2018local} formalised this as \emph{local causal states}---predictive equivalence classes of past cones---providing theoretical grounding for our design of a cone-restricted context vector $c_t(i)$.
+
+In neural architectures, several works enforce cone structure directly. Zheng et al.~\cite{zheng2021dept} introduce cone-shaped attention priors for multi-agent systems (DePT). Xu and Cao~\cite{xu2024msc} argue that effective attention window size should be proportional to frame difference, likening this to a light-cone boundary. These works validate cone-shaped masking as a principled inductive bias, but operate on point agents or regular grids---none on irregular deformable meshes with heterogeneous material properties.
+
+In spatiotemporal graph networks, Jiang et al.~\cite{jiang2023pdformer} explicitly model propagation delay in traffic forecasting via delay-aware attention with separate short/long-range masks. Wu et al.~\cite{wu2019graphwavenet} use dilated causal convolutions for exponentially growing temporal receptive fields. Yue et al.~\cite{yue2025graphwave} reinterpret message passing as wave propagation with an explicit speed parameter, directly illustrating the speed--step-size tradeoff that justifies our fixed-step discrete formulation. These approaches address delayed propagation but target sensor-network domains, not deformable mesh mechanics.
+
+%-----------------------------------------------------------------------
+\subsection{Multi-Scale Mesh Representations and Causality-Aware Training}
+%-----------------------------------------------------------------------
+
+Our multi-scale edge construction addresses the message-passing bottleneck on high-resolution meshes. Fortunato et al.~\cite{fortunato2022multiscale} tackle this with hierarchical fine-plus-coarse message passing using separate node sets and pooling; we instead follow the MSEA-MGN approach of maintaining a single node set with varying edge sets. Liu et al.~\cite{liu2024locality_lno} provide a key theoretical insight: hyperbolic PDEs have bounded domains of dependence (finite-speed propagation), while parabolic PDEs have rapidly decaying but unbounded influence---precisely the distinction that motivates coupling our spatial receptive field to temporal delay via the causal cone.
+
+Our progressive rollout curriculum in Stage~2 is motivated by the observation that na\"{i}ve global-in-time optimisation can violate physical causality. Wang et al.~\cite{wang2024respecting} demonstrate this for PINNs: simultaneously penalising residuals at all time points can converge to wrong solutions. Penwarden et al.~\cite{penwarden2023causal_sweep} propose causal sweeping strategies that enforce temporal ordering during training. Our progressive $K$-step strategy translates this principle to the mesh-emulator setting: the model first learns accurate single-step dynamics ($K=1$) before being asked to maintain physical consistency over longer horizons.
+
+%=======================================================================
+\bibliographystyle{plain}
+\begin{thebibliography}{99}
+
+% --- Character secondary motion and deformation ---
+
+\bibitem{zheng2021deep}
+M.~Zheng, Y.~Zhou, D.~Ceylan, and J.~Barbic.
+\newblock A deep emulator for secondary motion of {3D} characters.
+\newblock In \emph{Proc.\ IEEE/CVF CVPR}, 2021.
+
+\bibitem{wang2024msea}
+S.~Wang and S.~Liu.
+\newblock Multi-scale edge aggregation mesh-graph-network for character secondary motion.
+\newblock \emph{Comput.\ Anim.\ Virtual Worlds}, 35(3--4):e2245, 2024.
+
+\bibitem{dalton2023softtissue}
+D.~Dalton, D.~Husmeier, and H.~Gao.
+\newblock Physics-informed graph neural network emulation of soft-tissue mechanics.
+\newblock \emph{Comput.\ Methods Appl.\ Mech.\ Engrg.}, 417(A):116351, 2023.
+
+\bibitem{wang2025hierarchical}
+T.~Wang and S.~Liu.
+\newblock Hierarchical neural skinning deformation with self-supervised training for character animation.
+\newblock In \emph{Proc.\ ACM Comput.\ Graphics and Interactive Techniques (I3D)}, 2025.
+
+\bibitem{wang2024apparel}
+R.~Wang, W.~Mao, C.~Lu, and H.~Li.
+\newblock Towards high-quality {3D} motion transfer with realistic apparel animation.
+\newblock In \emph{Proc.\ European Conf.\ Computer Vision (ECCV)}, 2024.
+
+\bibitem{akyurek2025spring}
+B.~Aky\"{u}rek and Y.~Sahillio\u{g}lu.
+\newblock Real-time secondary animation with spring decomposed skinning.
+\newblock \emph{Computer Graphics Forum}, 44(5), 2025.
+
+\bibitem{benchekroun2023eigenmodes}
+O.~Benchekroun, J.~E. Zhang, S.~Chaudhuri, E.~Grinspun, Y.~Zhou, and A.~Jacobson.
+\newblock Fast complementary dynamics via skinning eigenmodes.
+\newblock \emph{ACM Trans.\ Graphics (SIGGRAPH)}, 42(4):1--12, 2023.
+
+% --- Causal cones as a modelling primitive ---
+
+\bibitem{goerg2012licors}
+G.~M. Goerg and C.~R. Shalizi.
+\newblock {LICORS}: Light cone reconstruction of states for non-parametric forecasting of spatio-temporal systems.
+\newblock \emph{arXiv:1206.2398}, 2012.
+
+\bibitem{goerg2013mixed}
+G.~M. Goerg and C.~R. Shalizi.
+\newblock Mixed {LICORS}: A nonparametric algorithm for predictive state reconstruction.
+\newblock In \emph{AISTATS}, PMLR, 2013.
+
+\bibitem{rupe2018local}
+A.~Rupe and J.~P. Crutchfield.
+\newblock Local causal states and discrete coherent structures.
+\newblock \emph{Chaos}, 28(7):075312, 2018.
+
+% --- Causal-cone priors in attention ---
+
+\bibitem{zheng2021dept}
+W.~Zheng, Q.~Guo, H.~Yang, P.~Wang, and Z.~Wang.
+\newblock Delayed propagation transformer: A universal computation engine towards practical control in cyber-physical systems.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2021.
+
+\bibitem{xu2024msc}
+X.~Xu and M.~Cao.
+\newblock {MSC}: Multi-scale spatio-temporal causal attention for autoregressive video diffusion.
+\newblock \emph{arXiv:2412.09828}, 2024.
+
+% --- Propagation delay and long-range dependence ---
+
+\bibitem{jiang2023pdformer}
+J.~Jiang, C.~Han, W.~X. Zhao, and J.~Wang.
+\newblock {PDFormer}: Propagation delay-aware dynamic long-range transformer for traffic flow prediction.
+\newblock In \emph{Proc.\ AAAI Conf.\ Artificial Intelligence}, 2023.
+
+\bibitem{wu2019graphwavenet}
+Z.~Wu, S.~Pan, G.~Long, J.~Jiang, and C.~Zhang.
+\newblock Graph {WaveNet} for deep spatial-temporal graph modeling.
+\newblock In \emph{Proc.\ IJCAI}, 2019.
+
+\bibitem{yue2025graphwave}
+J.~Yue, H.~Li, J.~Sheng, Y.~Guo, X.~Zhang, C.~Zhou, T.~Liu, and L.~Guo.
+\newblock Graph wave networks.
+\newblock In \emph{Proc.\ ACM Web Conference (WWW)}, 2025.
+
+% --- Multi-scale mesh simulation ---
+
+\bibitem{fortunato2022multiscale}
+M.~Fortunato, T.~Pfaff, P.~Wirnsberger, A.~Pritzel, and P.~Battaglia.
+\newblock {MultiScale MeshGraphNets}.
+\newblock \emph{arXiv:2210.00612}, 2022.
+
+\bibitem{liu2024locality_lno}
+H.~Liu, Z.~Xu, and B.~Shi.
+\newblock On the locality of local neural operator in learning fluid dynamics.
+\newblock \emph{Comput.\ Methods Appl.\ Mech.\ Engrg.}, 2024.
+
+% --- Causality-respecting training ---
+
+\bibitem{wang2024respecting}
+S.~Wang, S.~Sankaran, and P.~Perdikaris.
+\newblock Respecting causality for training physics-informed neural networks.
+\newblock \emph{Comput.\ Methods Appl.\ Mech.\ Engrg.}, 421:116813, 2024.
+
+\bibitem{penwarden2023causal_sweep}
+M.~Penwarden, A.~D. Jagtap, S.~Zhe, G.~E. Karniadakis, and R.~M. Kirby.
+\newblock A unified scalable framework for causal sweeping strategies for physics-informed neural networks and their temporal decompositions.
+\newblock \emph{J.\ Comput.\ Phys.}, 493:112464, 2023.
+
+\end{thebibliography}
+
+\end{document}

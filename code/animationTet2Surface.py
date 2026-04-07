@@ -1,5 +1,4 @@
 # create character animation on surface from the prediction
-
 import numpy as np
 import os
 import subprocess

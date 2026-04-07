@@ -1,3 +1,10 @@
-Please run test.py to get roll-out prediction results. We've provided a pretrained weight file for you. There are two options for rendering the prediction results. Set flag to 'surface" means we directly render the surface results while flag "tet" represents volumetric results rendering.
+# Code
 
-If flag "surface" is selected, two utility files are needed (in vega_FEM) for interpolating the volumetric results to the surface results. Please refer to the folder vega_FEM for how to compile the two utility files.
+Run `train.py` to train the model (Stage 1 supervised + Stage 2 physics self-supervised).
+
+Run `test.py` to generate rollout predictions. Set the `flag` variable to control rendering:
+- `"tet"` — volumetric mesh rendering
+- `"surface"` — surface mesh rendering (requires Vega FEM utilities)
+- `"tet_surface"` — both, stacked vertically
+
+For surface rendering, compile the Vega FEM utilities in `vega_FEM/` and ensure `libosmesa6`, `libglu1-mesa`, and `freeglut3` are installed.

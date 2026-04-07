@@ -127,3 +127,24 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# ─── Project-specific ────────────────────────────────────────────────
+
+# Model weights and checkpoints
+code/weight/*.weight
+code/weight/eval/
+
+# Training logs (TensorBoard)
+code/runs/
+
+# LaTeX build artifacts
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.synctex.gz
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.pdf
+
+# Claude Code local settings
+.claude/

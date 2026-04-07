@@ -1,230 +1,174 @@
-'''
-Author: Mianlun Zheng
-load data for network training and testing
-'''
+"""
+Data loader for the causal spatiotemporal deep emulator.
+Supports extended temporal history (T frames) and multi-scale edge construction.
+"""
 
 import numpy as np
 import torch
-import matplotlib.pyplot as plt
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import os
+from config import TEMPORAL_WINDOW
 
-# form the dataset for batch training 
-class Mesh_Dataset(Dataset):
-    def __init__(self, mesh_path_root, seq_num, frame_num):
-        self.constraint, self.dynamic_f, self.reference_f, self.adj_matrix, self.stiffness, self.mass = loadTrainingInputData(mesh_path_root, seq_num, frame_num)
-        self.output_f = loadTrainingOutputData(mesh_path_root, seq_num, frame_num)
-        self.sample_num = self.output_f.shape[0]
 
-    def __len__(self):
-        return self.sample_num
-    
-    def __getitem__(self, idx):
-        return self.constraint, self.dynamic_f[idx], self.reference_f[idx], self.adj_matrix, self.stiffness[idx], self.mass[idx], self.output_f[idx]
-
-# data formats:
-# u_i, the dynamic mesh at frame i, vertices# * 3
-# x_i, the reference mesh at frame i, vertices# * 3
-# c, the unconstraint information, vertices# * 1
-# m, the mass, vertices# * 1
-# k, the stiffness, 1
-# adj, the adjacency matrix, #vertices# * max_neighbors#
-#      !!! note !!!: to keep the shape regular, we filled the blank positions with 0
-#      !!! note !!!: 1-indexed
-#       eg: [ [1,2,3], [1,0,0] ], 
-#       so, the first columns of the input feature should be filled with 0
-
-# training data formats:
-# input data: 
-# unconstraint: batch * vertex_num * 1
-# +1 dimension: filled with 0 values in case the vertex's negibors < max_neighbors#
-# dynamic_f: batch * (vertex_num+1) * 9
-#            u_i(+0), u_i(-1), u_i(-2) 
-# reference_f: batch * (vertex_num+1) * 9
-#            x_i(+0), x_i(-1), x_i(-2) 
-# adj_matrix: batch * vertex_num * max_neighbors#
-# mass: (vertex_num+1) * 1
-# stiffness: batch * vertex_num * max_neighbors#
-# stiffness/mass: batch * vertex_num * 1
-# output data:
-# feature: displacements at a certain vertex: x, y, z
-# vertcies# * 3
-
-# load binary file of float data
 def loadData_Float(filename):
     data = np.fromfile(filename, dtype=np.float64)
-    data = np.array(data)
-    return data
+    return np.array(data)
 
-# load binary file of int data
+
 def loadData_Int(filename):
     data = np.fromfile(filename, dtype=np.int32)
-    data = np.array(data)
-    return data
+    return np.array(data)
 
-# load input data for training
-def loadTrainingInputData(file_path, seq_num, frame_num):
-    dynamic_f = []
-    reference_f = []
-    stiffness = []
-    mass = []
-    for i in range(seq_num):
-        for j in range(frame_num-1):
-            # current dynamic mesh u(0)
-            for k in range(-2, 1):
-                u_curr_filename = ""
-                if(j+k<0):
-                    u_curr_filename = os.path.join(file_path, str(i+1), "u_" + str(0))
-                elif(j+k>frame_num-1):
-                    u_curr_filename = os.path.join(file_path, str(i+1), "u_" + str(frame_num-1))
-                else:
-                    u_curr_filename = os.path.join(file_path, str(i+1), "u_" + str(j+k))
-                u_curr = loadData_Float(u_curr_filename).reshape((-1,3))
-                u_curr = np.concatenate((np.zeros((1,3), dtype = np.float64), u_curr), 0)
-                if(k==-2):
-                    u = u_curr
-                else:
-                    u = np.concatenate((u_curr, u), axis = 1)
-            for k in range (-1, 2):
-                x_curr_filename = ""
-                if(j+k<0):
-                    x_curr_filename = os.path.join(file_path, str(i+1), "x_" + str(0))
-                elif(j+k>frame_num-1):
-                    x_curr_filename = os.path.join(file_path, str(i+1), "x_" + str(frame_num-1))
-                else:
-                    x_curr_filename = os.path.join(file_path, str(i+1), "x_" + str(j+k))
-                x_curr = loadData_Float(x_curr_filename).reshape((-1,3))
-                x_curr = np.concatenate((np.zeros((1,3), dtype = np.float64), x_curr), 0)
-                if(k==-1):
-                    x = x_curr
-                else:
-                    x = np.concatenate((x_curr, x), axis = 1)
 
-            k_filename = os.path.join(file_path, str(i+1), "k") # stiffness for each vertex
-            k = loadData_Float(k_filename) 
-            k = np.expand_dims(k, axis=1)
-            k = k * 0.000001
-            m_filename = os.path.join(file_path, str(i+1), "m") # mass for each vertex
-            m = loadData_Float(m_filename) 
-            m = np.expand_dims(m, axis=1)
-            m = m * 1000
+class MeshDataset(Dataset):
+    """Dataset for training with extended temporal window."""
+
+    def __init__(self, mesh_path_root, seq_num, frame_num):
+        """
+        Args:
+            mesh_path_root: path containing sequence folders
+            seq_num: number of sequences to load
+            frame_num: number of frames per sequence
+        """
+        temporal_window = TEMPORAL_WINDOW
+        self.constraint, self.adj_matrix = load_topology(mesh_path_root)
+
+        self.dynamic_frames = []   # list of (T+1, V, 3) tensors
+        self.reference_frames = [] # list of (T+1, V, 3) tensors
+        self.stiffness = []        # list of (V, 1) tensors
+        self.mass = []             # list of (V, 1) tensors
+        self.output_f = []         # list of (V, 3) tensors (delta_u ground truth)
+
+        for i in range(seq_num):
+            seq_path = os.path.join(mesh_path_root, str(i + 1))
+
+            # Load stiffness and mass (constant per sequence)
+            k = loadData_Float(os.path.join(seq_path, "k"))
+            k = np.expand_dims(k, axis=1) * 0.000001
+            m = loadData_Float(os.path.join(seq_path, "m"))
+            m = np.expand_dims(m, axis=1) * 1000
             m[0] = 1.0
 
-            dynamic_f.append(u)
-            reference_f.append(x)
-            stiffness.append(k)
-            mass.append(m)
+            for j in range(frame_num - 1):
+                # Load T+1 frames of dynamic displacements: [t, t-1, ..., t-T]
+                u_frames = []
+                for tau in range(temporal_window + 1):
+                    idx = max(0, min(j - tau, frame_num - 1))
+                    u = loadData_Float(os.path.join(seq_path, f"u_{idx}")).reshape(-1, 3)
+                    u = np.concatenate([np.zeros((1, 3), dtype=np.float64), u], axis=0)
+                    u_frames.append(u)
 
-    c_filename = os.path.join(file_path, "1/c") # constraint information as mask, 0/1: unconstrained / constrained; same over the same mesh
+                # Load T+1 frames of reference positions: [t+1, t, t-1, ..., t-T+1]
+                x_frames = []
+                for tau in range(-1, temporal_window):
+                    idx = max(0, min(j - tau, frame_num - 1))
+                    x = loadData_Float(os.path.join(seq_path, f"x_{idx}")).reshape(-1, 3)
+                    x = np.concatenate([np.zeros((1, 3), dtype=np.float64), x], axis=0)
+                    x_frames.append(x)
+
+                # Ground truth: delta_u = u(t+1) - u(t)
+                u_next = loadData_Float(os.path.join(seq_path, f"u_{min(j + 1, frame_num - 1)}")).reshape(-1, 3)
+                u_next = np.concatenate([np.zeros((1, 3), dtype=np.float64), u_next], axis=0)
+                u_curr = loadData_Float(os.path.join(seq_path, f"u_{j}")).reshape(-1, 3)
+                u_curr = np.concatenate([np.zeros((1, 3), dtype=np.float64), u_curr], axis=0)
+                delta_u = u_next - u_curr
+
+                self.dynamic_frames.append(np.stack(u_frames, axis=0))    # (T+1, V, 3)
+                self.reference_frames.append(np.stack(x_frames, axis=0))  # (T+1, V, 3)
+                self.stiffness.append(k)
+                self.mass.append(m)
+                self.output_f.append(delta_u)
+
+        self.dynamic_frames = torch.from_numpy(np.array(self.dynamic_frames)).float()
+        self.reference_frames = torch.from_numpy(np.array(self.reference_frames)).float()
+        self.stiffness = torch.from_numpy(np.array(self.stiffness)).float()
+        self.mass = torch.from_numpy(np.array(self.mass)).float()
+        self.output_f = torch.from_numpy(np.array(self.output_f)).float()
+
+    def __len__(self):
+        return self.dynamic_frames.shape[0]
+
+    def __getitem__(self, idx):
+        return (self.constraint, self.dynamic_frames[idx], self.reference_frames[idx],
+                self.adj_matrix, self.stiffness[idx], self.mass[idx], self.output_f[idx])
+
+
+def load_topology(mesh_path_root):
+    """Load constraint and adjacency (shared across sequences for same mesh)."""
+    c_filename = os.path.join(mesh_path_root, "1", "c")
     constraint = loadData_Int(c_filename)
+    constraint = torch.from_numpy(constraint).long()
 
-    adj_filename = os.path.join(file_path, "1/adj") # adjacent information for each vertex
-    adj_matrix = loadData_Int(adj_filename).reshape((u.shape[0], -1))
-    
-    constraint = torch.from_numpy(np.array(constraint)).type(torch.LongTensor)
-    dynamic_f = torch.from_numpy(np.array(dynamic_f)).float()
-    reference_f = torch.from_numpy(np.array(reference_f)).float()
-    adj_matrix = torch.from_numpy(np.array(adj_matrix)).type(torch.LongTensor)
-    stiffness = torch.from_numpy(np.array(stiffness)).float()
-    mass = torch.from_numpy(np.array(mass)).float()
+    adj_filename = os.path.join(mesh_path_root, "1", "adj")
+    adj_raw = loadData_Int(adj_filename)
+    # Infer vertex count from constraint
+    V = constraint.shape[0]
+    adj_matrix = adj_raw.reshape(V, -1)
+    adj_matrix = torch.from_numpy(adj_matrix).long()
 
-    return constraint, dynamic_f, reference_f, adj_matrix, stiffness, mass
+    return constraint, adj_matrix
 
-# form the output features for the whole graph
-# feature: displacements at a certain vertex: x, y, z
-# vertcies# * 3
-def loadTrainingOutputData(file_path, seq_num, frame_num):
-    data = []
-    for i in range(seq_num):
-        for j in range(frame_num-1):
-            u_next_filename = os.path.join(file_path, str(i+1), "u_" + str(j+1))
-            u_next = loadData_Float(u_next_filename).reshape((-1,3))
-            u_next = np.concatenate((np.zeros((1,3), dtype = np.float64), u_next), 0)
-            u_curr_filename = os.path.join(file_path, str(i+1), "u_" + str(j))
-            u_curr = loadData_Float(u_curr_filename).reshape((-1,3))
-            u_curr = np.concatenate((np.zeros((1,3), dtype = np.float64), u_curr), 0)
-            u = u_next - u_curr
-            data.append(u)
-    data = torch.from_numpy(np.array(data)).float()
-    return data
 
 def loadTestInputData(file_path, curr_frame, frame_num):
-    dynamic_f = []
-    reference_f = []
-    stiffness = []
-    mass = []
-    # current dynamic mesh u(0)
-    for k in range(-2, 1):
-        u_curr_filename = ""
-        if(curr_frame+k<0):
-            u_curr_filename = os.path.join(file_path, "u_0")
-        elif(curr_frame+k>frame_num-1):
-            u_curr_filename = os.path.join(file_path, "u_" + str(frame_num-1))
-        else:
-            u_curr_filename = os.path.join(file_path, "u_" + str(curr_frame+k))
-        u_curr = loadData_Float(u_curr_filename).reshape((-1,3))
-        u_curr = np.concatenate((np.zeros((1,3), dtype = np.float64), u_curr), 0)
-        if(k==-2):
-            u = u_curr
-        else:
-            u = np.concatenate((u_curr, u), axis = 1)
-    
-    for k in range (-1, 2):
-        x_curr_filename = ""
-        if(curr_frame+k<0):
-            x_curr_filename = os.path.join(file_path, "x_0")
-        elif(curr_frame+k>frame_num-1):
-            x_curr_filename = os.path.join(file_path, "x_" + str(frame_num-1))
-        else:
-            x_curr_filename = os.path.join(file_path, "x_" + str(curr_frame+k))
-        x_curr = loadData_Float(x_curr_filename).reshape((-1,3))
-        x_curr = np.concatenate((np.zeros((1,3), dtype = np.float64), x_curr), 0)
-        if(k==-1):
-            x = x_curr
-        else:
-            x = np.concatenate((x_curr, x), axis = 1)
-    
+    """Load test input data with extended temporal window.
+
+    Returns:
+        constraint: (V,)
+        dynamic_frames: (1, T+1, V, 3)
+        reference_frames: (1, T+1, V, 3)
+        adj_matrix: (V, max_neighbors)
+        stiffness: (1, V, 1)
+        mass: (1, V, 1)
+    """
+    temporal_window = TEMPORAL_WINDOW
+    # Dynamic frames: [t, t-1, ..., t-T]
+    u_frames = []
+    for tau in range(temporal_window + 1):
+        idx = max(0, min(curr_frame - tau, frame_num - 1))
+        u = loadData_Float(os.path.join(file_path, f"u_{idx}")).reshape(-1, 3)
+        u = np.concatenate([np.zeros((1, 3), dtype=np.float64), u], axis=0)
+        u_frames.append(u)
+
+    # Reference frames: [t+1, t, t-1, ..., t-T+1]
+    x_frames = []
+    for tau in range(-1, temporal_window):
+        idx = max(0, min(curr_frame - tau, frame_num - 1))
+        x = loadData_Float(os.path.join(file_path, f"x_{idx}")).reshape(-1, 3)
+        x = np.concatenate([np.zeros((1, 3), dtype=np.float64), x], axis=0)
+        x_frames.append(x)
+
     c_filename = os.path.join(file_path, "c")
     constraint = loadData_Int(c_filename)
-    adj_filename = os.path.join(file_path, "adj") # adjacent information for each vertex
-    adj_matrix = loadData_Int(adj_filename).reshape((u.shape[0], -1))
 
-    k_filename = os.path.join(file_path, "k") # stiffness for each vertex
-    k = loadData_Float(k_filename) 
-    k = np.expand_dims(k, axis=1)
-    k = k * 0.000001
-    m_filename = os.path.join(file_path, "m") # mass for each vertex
-    m = loadData_Float(m_filename) 
-    m = np.expand_dims(m, axis=1)
-    m = m * 1000
+    adj_filename = os.path.join(file_path, "adj")
+    adj_raw = loadData_Int(adj_filename)
+    V = constraint.shape[0]
+    adj_matrix = adj_raw.reshape(V, -1)
+
+    k = loadData_Float(os.path.join(file_path, "k"))
+    k = np.expand_dims(k, axis=1) * 0.000001
+    m = loadData_Float(os.path.join(file_path, "m"))
+    m = np.expand_dims(m, axis=1) * 1000
     m[0] = 1.0
-    
-    dynamic_f.append(u)
-    reference_f.append(x)
-    stiffness.append(k)
-    mass.append(m)
 
-    constraint = torch.from_numpy(np.array(constraint)).type(torch.LongTensor)
-    dynamic_f = torch.from_numpy(np.array(dynamic_f)).float()
-    reference_f = torch.from_numpy(np.array(reference_f)).float()
-    adj_matrix = torch.from_numpy(np.array(adj_matrix)).type(torch.LongTensor)
-    stiffness = torch.from_numpy(np.array(stiffness)).float()
-    mass = torch.from_numpy(np.array(mass)).float()
+    dynamic_frames = np.stack(u_frames, axis=0)[np.newaxis]    # (1, T+1, V, 3)
+    reference_frames = np.stack(x_frames, axis=0)[np.newaxis]  # (1, T+1, V, 3)
 
-    return constraint, dynamic_f, reference_f, adj_matrix, stiffness, mass
+    constraint = torch.from_numpy(constraint).long()
+    dynamic_frames = torch.from_numpy(dynamic_frames).float()
+    reference_frames = torch.from_numpy(reference_frames).float()
+    adj_matrix = torch.from_numpy(adj_matrix).long()
+    stiffness = torch.from_numpy(k[np.newaxis]).float()
+    mass = torch.from_numpy(m[np.newaxis]).float()
 
-# form the output features for the whole graph
-# feature: displacements at a certain vertex: x, y, z
-# vertcies# * 3
+    return constraint, dynamic_frames, reference_frames, adj_matrix, stiffness, mass
+
+
 def loadTestOutputData(file_path, curr_frame, frame_num):
-    output_f = []
-    u_next_filename = os.path.join(file_path, "u_" + str(curr_frame+1))
-    u_next = loadData_Float(u_next_filename).reshape((-1,3))
-    u_next = np.concatenate((np.zeros((1,3), dtype = np.float64), u_next), 0)
-    u_curr_filename = os.path.join(file_path, "u_" + str(curr_frame))
-    u_curr = loadData_Float(u_curr_filename).reshape((-1,3))
-    u_curr = np.concatenate((np.zeros((1,3), dtype = np.float64), u_curr), 0)
-    u = u_next - u_curr
-    output_f.append(u)
-    output_f = torch.from_numpy(np.array(output_f)).float()
-    return output_f
+    """Load ground truth displacement increment for testing."""
+    u_next = loadData_Float(os.path.join(file_path, f"u_{curr_frame + 1}")).reshape(-1, 3)
+    u_next = np.concatenate([np.zeros((1, 3), dtype=np.float64), u_next], axis=0)
+    u_curr = loadData_Float(os.path.join(file_path, f"u_{curr_frame}")).reshape(-1, 3)
+    u_curr = np.concatenate([np.zeros((1, 3), dtype=np.float64), u_curr], axis=0)
+    delta_u = u_next - u_curr
+    return torch.from_numpy(delta_u[np.newaxis]).float()
