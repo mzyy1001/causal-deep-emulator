@@ -132,7 +132,6 @@ dmypy.json
 
 # Model weights and checkpoints
 code/weight/*.weight
-code/weight/eval/
 
 # Training logs (TensorBoard)
 code/runs/
