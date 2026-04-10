@@ -424,42 +424,51 @@ class CausalSpatiotemporalModel(nn.Module):
 
 
 class PhysicsLoss(nn.Module):
-    """Physics-based self-supervised energy terms for Stage 2 training."""
+    """Physics-based self-supervised energy terms for Stage 2 training.
 
-    def __init__(self, gravity=9.81):
+    All energy terms are normalized by vertex/element count to keep
+    gradients on a consistent scale regardless of mesh resolution.
+    Configurable weights allow balancing the relative contribution
+    of each term.
+    """
+
+    def __init__(self, gravity=9.81, w_inertia=1.0, w_gravity=0.01, w_strain=1.0):
         super().__init__()
         self.gravity = gravity
+        self.w_inertia = w_inertia
+        self.w_gravity = w_gravity
+        self.w_strain = w_strain
 
-    def inertia_loss(self, x_next, x_curr, x_prev, mass):
-        """Inertial potential energy.
+    def inertia_loss(self, pos_next, pos_curr, pos_prev, mass):
+        """Inertial potential energy (mean over vertices).
 
         Args:
-            x_next: (V, 3) predicted next positions
-            x_curr: (V, 3) current positions
-            x_prev: (V, 3) previous positions
+            pos_next: (V, 3) predicted next positions
+            pos_curr: (V, 3) current positions
+            pos_prev: (V, 3) previous positions
             mass: (V, 1) per-vertex mass
 
         Returns:
             scalar loss
         """
-        accel = x_next + x_prev - 2 * x_curr  # (V, 3)
-        energy = 0.5 * (mass * accel * accel).sum()
+        accel = pos_next + pos_prev - 2 * pos_curr  # (V, 3)
+        energy = 0.5 * (mass * accel * accel).mean()
         return energy
 
-    def gravity_loss(self, x_curr, mass):
-        """Gravitational potential energy (assuming y-axis is up).
+    def gravity_loss(self, pos_curr, mass):
+        """Gravitational potential energy (mean over vertices, y-axis up).
 
         Args:
-            x_curr: (V, 3) current positions
+            pos_curr: (V, 3) current positions (actual world positions)
             mass: (V, 1) per-vertex mass
 
         Returns:
             scalar loss
         """
-        return -(mass * self.gravity * x_curr[:, 1:2]).sum()
+        return -(mass * self.gravity * pos_curr[:, 1:2]).mean()
 
     def strain_loss(self, x, elements, rest_volumes, rest_inv, lam, mu):
-        """Neo-Hookean strain energy.
+        """Neo-Hookean strain energy (mean over elements).
 
         Args:
             x: (V, 3) deformed vertex positions
@@ -491,17 +500,17 @@ class PhysicsLoss(nn.Module):
         tr_FtF = FtF[:, 0, 0] + FtF[:, 1, 1] + FtF[:, 2, 2]
 
         psi = 0.5 * lam * log_det ** 2 - mu * log_det + 0.5 * mu * (tr_FtF - 3)
-        energy = (psi * rest_volumes).sum()
+        energy = (psi * rest_volumes).mean()
         return energy
 
-    def forward(self, x_next, x_curr, x_prev, mass, elements=None,
+    def forward(self, pos_next, pos_curr, pos_prev, mass, elements=None,
                 rest_volumes=None, rest_inv=None, lam=1.0, mu=1.0):
-        """Combined physics loss.
+        """Combined physics loss on actual world positions.
 
         Args:
-            x_next: (V, 3) predicted next positions
-            x_curr: (V, 3) current positions
-            x_prev: (V, 3) previous positions
+            pos_next: (V, 3) predicted next world positions
+            pos_curr: (V, 3) current world positions
+            pos_prev: (V, 3) previous world positions
             mass: (V, 1) per-vertex mass
             elements: optional (E, 4) tet indices for strain
             rest_volumes: optional (E,) rest volumes
@@ -512,10 +521,11 @@ class PhysicsLoss(nn.Module):
         Returns:
             total_loss: scalar
         """
-        loss = self.inertia_loss(x_next, x_curr, x_prev, mass)
-        loss = loss + self.gravity_loss(x_curr, mass)
+        loss = self.w_inertia * self.inertia_loss(pos_next, pos_curr, pos_prev, mass)
+        loss = loss + self.w_gravity * self.gravity_loss(pos_curr, mass)
 
         if elements is not None and rest_volumes is not None and rest_inv is not None:
-            loss = loss + self.strain_loss(x_next, elements, rest_volumes, rest_inv, lam, mu)
+            loss = loss + self.w_strain * self.strain_loss(
+                pos_next, elements, rest_volumes, rest_inv, lam, mu)
 
         return loss

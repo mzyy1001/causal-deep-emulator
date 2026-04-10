@@ -141,15 +141,17 @@ def train_stage1(net, writer, data_path_root, out_weight_folder,
 
 def rollout_k_steps(net, constraint, dynamic_frames, reference_frames,
                     adj_matrix, stiffness, mass, ms_edges, K):
-    """Run K-step autoregressive rollout, returning predicted positions.
+    """Run K-step autoregressive rollout, returning predicted displacements.
 
     Args:
-        dynamic_frames: (T+1, V, 3) initial history
-        reference_frames: (T+1, V, 3) reference history
+        dynamic_frames: (T+1, V, 3) displacement history [u(t), u(t-1), ...]
+        reference_frames: (T+1, V, 3) reference history [x(t+1), x(t), ...]
         K: rollout steps
 
     Returns:
-        predictions: list of K (V, 3) predicted position tensors
+        pred_displacements: list of K (V, 3) predicted displacement tensors
+        ref_positions: list of K (V, 3) corresponding reference positions
+            so that actual_position = ref_positions[i] + pred_displacements[i]
     """
     V = dynamic_frames.shape[1]
     free_mask = (constraint == 0)
@@ -158,20 +160,24 @@ def rollout_k_steps(net, constraint, dynamic_frames, reference_frames,
     dyn = dynamic_frames.clone()
     ref = reference_frames.clone()
 
-    predictions = []
+    pred_displacements = []
+    ref_positions = []
     for step in range(K):
         delta_u = net(constraint, dyn, ref, adj_matrix, stiffness, mass, ms_edges)
 
-        # Compute full predicted displacement
-        x_pred = torch.zeros(V, 3, device=dyn.device)
-        x_pred[free_mask] = dyn[0, free_mask] + delta_u  # u(t) + delta_u
-        x_pred[~free_mask] = ref[0, ~free_mask]  # constrained: use reference
+        # Compute full predicted displacement u(t+1)
+        u_pred = torch.zeros(V, 3, device=dyn.device)
+        u_pred[free_mask] = dyn[0, free_mask] + delta_u  # u(t) + delta_u
+        # For constrained vertices: displacement from reference
+        # ref[0] is x(t+1), ref[1] is x(t); constrained displacement stays 0
+        u_pred[~free_mask] = 0.0
 
-        predictions.append(x_pred)
+        pred_displacements.append(u_pred)
+        ref_positions.append(ref[0].clone())  # x(t+1) reference position
 
-        # Shift history: new frame becomes current
+        # Shift history: new displacement becomes current
         new_dyn = torch.zeros_like(dyn)
-        new_dyn[0] = x_pred
+        new_dyn[0] = u_pred
         new_dyn[1:] = dyn[:-1]
 
         new_ref = torch.zeros_like(ref)
@@ -182,7 +188,7 @@ def rollout_k_steps(net, constraint, dynamic_frames, reference_frames,
         dyn = new_dyn
         ref = new_ref
 
-    return predictions
+    return pred_displacements, ref_positions
 
 
 def train_stage2(net, writer, data_path_root, out_weight_folder,
@@ -242,20 +248,23 @@ def train_stage2(net, writer, data_path_root, out_weight_folder,
                         stiff, mass_val = stiff.cuda(), mass_val.cuda()
 
                     # K-step rollout
-                    preds = rollout_k_steps(
+                    pred_disps, ref_poss = rollout_k_steps(
                         net, constraint_b, dyn, ref,
                         adj_mat[0] if adj_mat.dim() > 2 else adj_mat,
                         stiff, mass_val, ms_edges, K)
 
                     # Accumulate physics loss over K steps
+                    # Convert displacements to actual positions: pos = ref + u
+                    # dyn = [u(t), u(t-1), ...], ref = [x(t+1), x(t), x(t-1), ...]
                     total_phys_loss = 0.0
-                    x_prev = dyn[1, :, :]  # t-1 positions
-                    x_curr = dyn[0, :, :]  # t positions
-                    for x_next in preds:
-                        step_loss = physics_loss_fn(x_next, x_curr, x_prev, mass_val)
+                    pos_prev = ref[2, :, :] + dyn[1, :, :]  # x(t-1) + u(t-1)
+                    pos_curr = ref[1, :, :] + dyn[0, :, :]  # x(t) + u(t)
+                    for u_next, x_ref in zip(pred_disps, ref_poss):
+                        pos_next = x_ref + u_next  # actual position
+                        step_loss = physics_loss_fn(pos_next, pos_curr, pos_prev, mass_val)
                         total_phys_loss = total_phys_loss + step_loss
-                        x_prev = x_curr
-                        x_curr = x_next
+                        pos_prev = pos_curr
+                        pos_curr = pos_next
 
                     # Accumulate gradients across batch
                     (total_phys_loss / B).backward()
