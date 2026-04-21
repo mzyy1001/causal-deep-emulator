@@ -1,0 +1,275 @@
+{
+  "models": {
+    "causal": {
+      "params": 761096,
+      "trainable": 761096
+    },
+    "ablation": {
+      "params": 761096,
+      "trainable": 761096
+    },
+    "baseline": {
+      "params": 237571,
+      "trainable": 237571
+    }
+  },
+  "stiffness": {
+    "causal": [
+      {
+        "stiffness": 5000000.0,
+        "single_step_mse": 0.075000461567397,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 2500000.0,
+        "single_step_mse": 0.07504897446357063,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 1000000.0,
+        "single_step_mse": 0.07521577035222435,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 500000.0,
+        "single_step_mse": 0.07549923763101106,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 250000.0,
+        "single_step_mse": 0.07596234721451765,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 100000.0,
+        "single_step_mse": 0.0767846879051649,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 50000.0,
+        "single_step_mse": 0.07737385426284163,
+        "num_frames": 100
+      }
+    ],
+    "ablation": [
+      {
+        "stiffness": 5000000.0,
+        "single_step_mse": 0.33781005079945314,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 2500000.0,
+        "single_step_mse": 0.3377551555229729,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 1000000.0,
+        "single_step_mse": 0.3376822279032058,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 500000.0,
+        "single_step_mse": 0.33821324466327496,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 250000.0,
+        "single_step_mse": 0.33882794152683343,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 100000.0,
+        "single_step_mse": 0.3397522821289749,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 50000.0,
+        "single_step_mse": 0.34040976172815135,
+        "num_frames": 100
+      }
+    ],
+    "baseline": [
+      {
+        "stiffness": 5000000.0,
+        "single_step_mse": 0.000647399175618375,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 2500000.0,
+        "single_step_mse": 0.0004532875172208151,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 1000000.0,
+        "single_step_mse": 0.00036959409779228734,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 500000.0,
+        "single_step_mse": 0.0003375980413329671,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 250000.0,
+        "single_step_mse": 0.0003243903648944979,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 100000.0,
+        "single_step_mse": 0.00035399776104895865,
+        "num_frames": 100
+      },
+      {
+        "stiffness": 50000.0,
+        "single_step_mse": 0.0004261912505171495,
+        "num_frames": 100
+      }
+    ]
+  },
+  "characters": {
+    "causal": [
+      {
+        "character": "michelle",
+        "motion": "cross_jumps",
+        "frames": 123,
+        "single_step_mse": 0.008130053209606558
+      },
+      {
+        "character": "michelle",
+        "motion": "gangnam_style",
+        "frames": 372,
+        "single_step_mse": 0.0041374690316115445
+      },
+      {
+        "character": "big_vegas",
+        "motion": "cross_jumps",
+        "frames": 123,
+        "single_step_mse": 0.006157594545511529
+      },
+      {
+        "character": "big_vegas",
+        "motion": "cross_jumps_rotation",
+        "frames": 123,
+        "single_step_mse": 0.00895127164083533
+      },
+      {
+        "character": "kaya",
+        "motion": "dancing_running_man",
+        "frames": 651,
+        "single_step_mse": 0.0038789165865455288
+      },
+      {
+        "character": "kaya",
+        "motion": "zombie_scream",
+        "frames": 168,
+        "single_step_mse": 0.010096257136247004
+      },
+      {
+        "character": "mousey",
+        "motion": "dancing_1",
+        "frames": 159,
+        "single_step_mse": 0.06479836315382272
+      },
+      {
+        "character": "mousey",
+        "motion": "swing_dancing_1",
+        "frames": 311,
+        "single_step_mse": 0.010834835628047585
+      },
+      {
+        "character": "ortiz",
+        "motion": "cross_jumps_rotation",
+        "frames": 123,
+        "single_step_mse": 0.005713046941673383
+      },
+      {
+        "character": "ortiz",
+        "motion": "jazz_dancing",
+        "frames": 327,
+        "single_step_mse": 0.0017432379651290831
+      }
+    ],
+    "ablation": [
+      {
+        "character": "michelle",
+        "motion": "cross_jumps",
+        "frames": 123,
+        "single_step_mse": 0.0037489198602270336
+      },
+      {
+        "character": "michelle",
+        "motion": "gangnam_style",
+        "frames": 372,
+        "single_step_mse": 0.0014077729377459036
+      },
+      {
+        "character": "big_vegas",
+        "motion": "cross_jumps",
+        "frames": 123,
+        "single_step_mse": 0.0028335232887184247
+      },
+      {
+        "character": "big_vegas",
+        "motion": "cross_jumps_rotation",
+        "frames": 123,
+        "single_step_mse": 0.005907105996739119
+      },
+      {
+        "character": "kaya",
+        "motion": "dancing_running_man",
+        "frames": 651,
+        "single_step_mse": 0.001985945795458974
+      },
+      {
+        "character": "kaya",
+        "motion": "zombie_scream",
+        "frames": 168,
+        "single_step_mse": 0.006142760946240742
+      },
+      {
+        "character": "mousey",
+        "motion": "dancing_1",
+        "frames": 159,
+        "single_step_mse": 0.021499398155137895
+      },
+      {
+        "character": "mousey",
+        "motion": "swing_dancing_1",
+        "frames": 311,
+        "single_step_mse": 0.02375690602522809
+      },
+      {
+        "character": "ortiz",
+        "motion": "cross_jumps_rotation",
+        "frames": 123,
+        "single_step_mse": 0.004317339092085604
+      },
+      {
+        "character": "ortiz",
+        "motion": "jazz_dancing",
+        "frames": 327,
+        "single_step_mse": 0.0010641493577531946
+      }
+    ]
+  },
+  "resource": {
+    "causal": {
+      "avg_ms": 47.84304830763075,
+      "fps": 20.90167820348739,
+      "peak_gpu_mb": 290.11083984375,
+      "num_frames": 50
+    },
+    "ablation": {
+      "avg_ms": 47.76092635260687,
+      "fps": 20.937617344715054,
+      "peak_gpu_mb": 290.11083984375,
+      "num_frames": 50
+    },
+    "baseline": {
+      "avg_ms": 1.442400614420573,
+      "fps": 693.2886675188433,
+      "peak_gpu_mb": 30.7802734375,
+      "num_frames": 50
+    }
+  }
+}

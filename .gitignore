@@ -145,5 +145,15 @@ paper/*.fls
 paper/*.fdb_latexmk
 paper/*.pdf
 
+# External tools (not part of this repo)
+Auto-claude-code-research-in-sleep/
+
+# Large model checkpoints and datasets (regenerated, not versioned)
+code/weight_v2/
+code/weight_v3a/
+data/vega_stiffness/
+data/fem_test/
+*.weight
+
 # Claude Code local settings
 .claude/

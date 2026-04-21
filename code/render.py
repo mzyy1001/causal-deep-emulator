@@ -21,10 +21,12 @@ def get_transformation(r_axis, theta, T):
     return camera_pose
 
 #suppose model is centered at (0,0,0) 
-def render_single_mesh(trimesh = None, enable_wire = False, camera_set = [6.0, 2.0, 5.0, 0.3], resolution = [400,800], enableAmbient=True, lightIntensity = 2):
-    scene = pyrender.Scene()
+def render_single_mesh(trimesh = None, enable_wire = False, camera_set = [6.0, 2.0, 5.0, 0.3], resolution = [400,800], enableAmbient=True, lightIntensity = 2, bg_color=None):
+    if bg_color is None:
+        bg_color = [1.0, 1.0, 1.0, 1.0]
+    scene = pyrender.Scene(bg_color=bg_color)
     if enableAmbient:
-        scene = pyrender.Scene(ambient_light = [1.0,1.0,1.0])
+        scene = pyrender.Scene(ambient_light = [0.6,0.6,0.6], bg_color=bg_color)
     if(trimesh):
         mesh_input = pyrender.Mesh.from_trimesh(trimesh, wireframe = False, smooth=False)
         scene.add(mesh_input)

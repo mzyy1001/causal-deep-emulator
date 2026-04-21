@@ -94,19 +94,105 @@ class MeshDataset(Dataset):
 
 
 def load_topology(mesh_path_root):
-    """Load constraint and adjacency (shared across sequences for same mesh)."""
-    c_filename = os.path.join(mesh_path_root, "1", "c")
+    """Load constraint and adjacency (shared across sequences for same mesh).
+
+    Tries mesh_path_root/1/c first (multi-sequence layout), then
+    mesh_path_root/c (flat character layout).
+    """
+    seq_subdir = os.path.join(mesh_path_root, "1")
+    if os.path.isdir(seq_subdir) and os.path.exists(os.path.join(seq_subdir, "c")):
+        base = seq_subdir
+    else:
+        base = mesh_path_root
+
+    c_filename = os.path.join(base, "c")
     constraint = loadData_Int(c_filename)
     constraint = torch.from_numpy(constraint).long()
 
-    adj_filename = os.path.join(mesh_path_root, "1", "adj")
+    adj_filename = os.path.join(base, "adj")
     adj_raw = loadData_Int(adj_filename)
-    # Infer vertex count from constraint
     V = constraint.shape[0]
     adj_matrix = adj_raw.reshape(V, -1)
     adj_matrix = torch.from_numpy(adj_matrix).long()
 
     return constraint, adj_matrix
+
+
+class SelfSupervisedDataset(Dataset):
+    """Dataset for Stage 2 self-supervised training on any mesh.
+
+    Only needs reference positions (x_*), constraint, stiffness, and mass.
+    Displacements (u_*) are initialized to zero — the model generates its own
+    trajectory, supervised by physics energy only.
+
+    Works with both:
+    - Multi-sequence layout: mesh_path_root/1/, mesh_path_root/2/, ...
+    - Flat character layout: mesh_path_root/ (single sequence, e.g., character motions)
+    """
+
+    def __init__(self, mesh_path_root, frame_num, stiffness_value=None):
+        """
+        Args:
+            mesh_path_root: path to motion data (flat or multi-sequence)
+            frame_num: number of frames
+            stiffness_value: optional override stiffness (float). If None, loads from file.
+        """
+        temporal_window = TEMPORAL_WINDOW
+        self.constraint, self.adj_matrix = load_topology(mesh_path_root)
+        V = self.constraint.shape[0]
+
+        # Determine data path (flat vs multi-sequence)
+        seq_subdir = os.path.join(mesh_path_root, "1")
+        if os.path.isdir(seq_subdir) and os.path.exists(os.path.join(seq_subdir, "k")):
+            data_path = seq_subdir
+        else:
+            data_path = mesh_path_root
+
+        # Load material properties
+        k = loadData_Float(os.path.join(data_path, "k"))
+        k = np.expand_dims(k, axis=1) * 0.000001
+        if stiffness_value is not None:
+            k[:] = stiffness_value * 0.000001
+        m = loadData_Float(os.path.join(data_path, "m"))
+        m = np.expand_dims(m, axis=1) * 1000
+        m[0] = 1.0
+
+        self.reference_frames = []
+        self.dynamic_frames = []
+        self.stiffness = []
+        self.mass = []
+
+        for j in range(frame_num - 1):
+            # Reference positions: [x(t+1), x(t), x(t-1), ..., x(t-T+1)]
+            x_frames = []
+            for tau in range(-1, temporal_window):
+                idx = max(0, min(j - tau, frame_num - 1))
+                x = loadData_Float(os.path.join(data_path, f"x_{idx}")).reshape(-1, 3)
+                x = np.concatenate([np.zeros((1, 3), dtype=np.float64), x], axis=0)
+                x_frames.append(x)
+
+            # Zero displacements: model starts from rest
+            u_frames = [np.zeros((V, 3), dtype=np.float64)
+                        for _ in range(temporal_window + 1)]
+
+            self.reference_frames.append(np.stack(x_frames, axis=0))
+            self.dynamic_frames.append(np.stack(u_frames, axis=0))
+            self.stiffness.append(k)
+            self.mass.append(m)
+
+        self.reference_frames = torch.from_numpy(np.array(self.reference_frames)).float()
+        self.dynamic_frames = torch.from_numpy(np.array(self.dynamic_frames)).float()
+        self.stiffness = torch.from_numpy(np.array(self.stiffness)).float()
+        self.mass = torch.from_numpy(np.array(self.mass)).float()
+        # Dummy output (not used in Stage 2, but keeps DataLoader interface consistent)
+        self.output_f = torch.zeros(len(self.reference_frames), V, 3)
+
+    def __len__(self):
+        return self.reference_frames.shape[0]
+
+    def __getitem__(self, idx):
+        return (self.constraint, self.dynamic_frames[idx], self.reference_frames[idx],
+                self.adj_matrix, self.stiffness[idx], self.mass[idx], self.output_f[idx])
 
 
 def loadTestInputData(file_path, curr_frame, frame_num):

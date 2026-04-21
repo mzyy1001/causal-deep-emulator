@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from config import TEMPORAL_WINDOW, NUM_SCALES, MSG_DIM, PROP_DIM, MASK_SHARPNESS
+from config import TEMPORAL_WINDOW, NUM_SCALES, MSG_DIM, PROP_DIM, MASK_SHARPNESS, USE_CAUSAL_CONE
 
 
 def build_multiscale_edges(adj_matrix, num_scales):
@@ -217,9 +217,11 @@ class CausalSpatiotemporalModel(nn.Module):
         self.num_scales = num_scales
         self.msg_dim = msg_dim
 
-        # Feature encoder: per-frame vertex features -> hidden dim
+        # Feature encoder: physics-informed per-frame features -> hidden dim
+        # Input: relative displacement (3) + ref velocity (3) + k (1) + m (1) + k/m (1) = 9D
+        feat_input_dim = 9
         self.feat_encoder = nn.Sequential(
-            nn.Linear(node_input_dim + ref_input_dim, 128),
+            nn.Linear(feat_input_dim, 128),
             nn.ReLU(),
             nn.Linear(128, msg_dim),
         )
@@ -240,57 +242,113 @@ class CausalSpatiotemporalModel(nn.Module):
         # Causal cone
         self.causal_cone = CausalConeModule(prop_dim, num_scales)
 
+        # Learnable blend ratio: per-vertex cone vs bypass weight
+        # Input: vertex properties (stiffness, mass, constraint) -> sigmoid -> alpha
+        # alpha=1 means full cone, alpha=0 means full bypass
+        self.blend_mlp = nn.Sequential(
+            nn.Linear(3, 32),  # [stiffness, mass, constraint]
+            nn.ReLU(),
+            nn.Linear(32, 1),
+            nn.Sigmoid(),  # output in [0, 1]
+        )
+        # Initialize bias so default alpha ≈ 0.8 (sigmoid(1.4) ≈ 0.8)
+        nn.init.constant_(self.blend_mlp[2].bias, 1.4)
+
         # Spatiotemporal attention
         self.st_attention = SpatiotemporalAttention(msg_dim, msg_dim, prop_dim)
 
-        # Current state encoder
+        # Current state encoder (same input dim as feat_encoder)
         self.current_encoder = nn.Sequential(
-            nn.Linear(node_input_dim + ref_input_dim, 128),
+            nn.Linear(9, 128),
             nn.ReLU(),
             nn.Linear(128, msg_dim),
         )
 
         # Dynamics update: predicts displacement increment
+        # Use ELU instead of Tanh — avoids saturation that limits output range
         self.dynamics_mlp = nn.Sequential(
             nn.Linear(msg_dim + msg_dim, 256),  # [current_state, context]
-            nn.Tanh(),
+            nn.ELU(),
             nn.Linear(256, 256),
-            nn.Tanh(),
+            nn.ELU(),
             nn.Linear(256, 256),
-            nn.Tanh(),
+            nn.ELU(),
             nn.Linear(256, 128),
-            nn.Tanh(),
-            nn.Linear(128, 3),
+            nn.ELU(),
+            nn.Linear(128, 3),  # linear output
         )
 
-    def encode_frame(self, dynamic_f, reference_f):
-        """Encode a single frame's features.
+    def encode_frame(self, dynamic_f, reference_f, ref_curr, stiffness, mass):
+        """Encode a single frame's physics-informed features.
 
         Args:
             dynamic_f: (V, 3) displacement at this frame
             reference_f: (V, 3) reference position at this frame
+            ref_curr: (V, 3) current frame reference (for relative features)
+            stiffness: (V, 1) per-vertex stiffness
+            mass: (V, 1) per-vertex mass
 
         Returns:
             h: (V, msg_dim)
         """
-        feat = torch.cat([dynamic_f, reference_f], dim=-1)
+        rel_disp = dynamic_f - ref_curr
+        ref_vel = reference_f - ref_curr
+        km_ratio = stiffness / (mass + 1e-8)
+        feat = torch.cat([rel_disp, ref_vel, stiffness, mass, km_ratio], dim=-1)  # (V, 9)
         return self.feat_encoder(feat)
 
-    def form_vertex_properties(self, constraint, stiffness, mass):
-        """Form per-vertex property features theta.
+    def compute_skeleton_distance(self, constraint, adj_matrix):
+        """Compute per-vertex distance to nearest constrained vertex via BFS.
+        Uses vectorized operations for speed.
 
         Args:
             constraint: (V,) binary constraint mask
-            stiffness: (V, 1) stiffness values
-            mass: (V, 1) mass values
+            adj_matrix: (V, max_neighbors) 1-indexed adjacency
 
         Returns:
-            theta: (V, prop_dim)
+            skel_dist: (V, 1) normalized distance to nearest constrained vertex
         """
+        V = constraint.shape[0]
+        device = constraint.device
+
+        # Move to CPU for faster BFS (GPU loops are slow)
+        adj_cpu = adj_matrix.cpu().numpy()
+        c_cpu = constraint.cpu().numpy()
+
+        import numpy as np
+        dist = np.full(V, 1e6)
+        dist[c_cpu == 1] = 0
+
+        # Vectorized BFS
+        for hop in range(20):
+            changed = False
+            for col in range(adj_cpu.shape[1]):
+                nb = adj_cpu[:, col] - 1  # 0-indexed
+                valid = nb >= 0
+                candidate = dist[nb[valid]] + 1
+                improved = candidate < dist[valid]
+                if improved.any():
+                    dist_valid = dist[valid].copy()
+                    dist_valid[improved] = candidate[improved]
+                    dist[valid] = dist_valid
+                    changed = True
+            if not changed:
+                break
+
+        # Normalize
+        finite = dist[dist < 1e6]
+        max_dist = finite.max() if len(finite) > 0 else 1.0
+        dist = dist / (max_dist + 1e-8)
+        dist[dist >= 1e6] = 1.0
+
+        return torch.from_numpy(dist.astype(np.float32)).unsqueeze(-1).to(device)
+
+    def form_vertex_properties(self, constraint, stiffness, mass):
+        """Form per-vertex property features theta."""
         props = torch.cat([
             stiffness,
             mass,
-            constraint.float().unsqueeze(-1)
+            constraint.float().unsqueeze(-1),
         ], dim=-1)  # (V, 3)
         return self.prop_encoder(props)
 
@@ -306,6 +364,7 @@ class CausalSpatiotemporalModel(nn.Module):
             stiffness: (V, 1) per-vertex stiffness
             mass: (V, 1) per-vertex mass
             multiscale_edges: optional precomputed list of edge index tensors
+            skel_dist: (V, 1) precomputed distance to nearest constrained vertex
 
         Returns:
             delta_u: (V_free, 3) predicted displacement increment for unconstrained vertices
@@ -326,47 +385,69 @@ class CausalSpatiotemporalModel(nn.Module):
         # messages[tau][s] = (V, msg_dim)
         all_messages = torch.zeros(V, T, self.num_scales + 1, self.msg_dim, device=device)
 
+        # Current reference frame for relative features
+        ref_curr = reference_frames[1]  # x(t), index 1 = current frame reference
+
         for tau_idx in range(T):
             frame_idx = tau_idx + 1  # tau=1 corresponds to frame t-1, which is index 1
             if frame_idx >= num_frames:
                 break
             h_frame = self.encode_frame(
-                dynamic_frames[frame_idx], reference_frames[frame_idx]
+                dynamic_frames[frame_idx], reference_frames[frame_idx],
+                ref_curr, stiffness, mass
             )  # (V, msg_dim)
 
             for s in range(self.num_scales + 1):
                 m_s = self.msea_layers[s](h_frame, multiscale_edges[s])  # (V, msg_dim)
                 all_messages[:, tau_idx, s, :] = m_s
 
-        # Causal cone masking (smooth sigmoid mask for gradient flow)
         tau_values = torch.arange(1, T + 1, device=device, dtype=torch.float32)
-        s_max = self.causal_cone(theta, tau_values)  # (V, T), continuous float
 
-        # Smooth mask: M(i,tau,s) = sigmoid(sharpness * (s_max(i,tau) - s))
-        # Approaches 1 when s << s_max, approaches 0 when s >> s_max.
-        # Fully differentiable — no vanishing gradient from hard cutoff.
-        scale_indices = torch.arange(self.num_scales + 1, device=device).float()  # (S,)
-        mask = torch.sigmoid(
-            MASK_SHARPNESS * (s_max.unsqueeze(-1) - scale_indices.unsqueeze(0).unsqueeze(0))
-        )  # (V, T, S)
+        if USE_CAUSAL_CONE:
+            # Causal cone masking (smooth sigmoid mask for gradient flow)
+            s_max = self.causal_cone(theta, tau_values)  # (V, T), continuous float
+
+            # Smooth mask: M(i,tau,s) = sigmoid(sharpness * (s_max(i,tau) - s))
+            # Approaches 1 when s << s_max, approaches 0 when s >> s_max.
+            # Fully differentiable — no vanishing gradient from hard cutoff.
+            scale_indices = torch.arange(self.num_scales + 1, device=device).float()  # (S,)
+            mask = torch.sigmoid(
+                MASK_SHARPNESS * (s_max.unsqueeze(-1) - scale_indices.unsqueeze(0).unsqueeze(0))
+            )  # (V, T, S)
+        else:
+            # Ablation: uniform mask — all scales accessible at all delays
+            S = self.num_scales + 1
+            mask = torch.ones(V, T, S, device=device)
 
         # Attention weights
         attn_logits = self.st_attention(
-            self.encode_frame(dynamic_frames[0], reference_frames[0]),
+            self.encode_frame(dynamic_frames[0], reference_frames[0],
+                              ref_curr, stiffness, mass),
             all_messages, tau_values, theta
         )  # (V, T, S)
 
-        # Multiply logits by soft mask, then softmax over all (tau, scale) entries
+        # Masked attention (causal cone gated)
         masked_logits = attn_logits + torch.log(mask + 1e-8)
         V_dim, T_dim, S_dim = masked_logits.shape
-        weights = F.softmax(masked_logits.reshape(V_dim, -1), dim=-1).reshape(V_dim, T_dim, S_dim)
+        weights_masked = F.softmax(masked_logits.reshape(V_dim, -1), dim=-1).reshape(V_dim, T_dim, S_dim)
+
+        if USE_CAUSAL_CONE:
+            # Residual unmasked attention: blend cone-gated with uniform attention
+            # 80% cone-masked + 20% unmasked bypass for robust information flow
+            weights_unmasked = F.softmax(attn_logits.reshape(V_dim, -1), dim=-1).reshape(V_dim, T_dim, S_dim)
+            weights = 0.8 * weights_masked + 0.2 * weights_unmasked
+        else:
+            weights = weights_masked
 
         # Weighted aggregation
         # (V, T, S, 1) * (V, T, S, msg_dim) -> sum -> (V, msg_dim)
         context = (weights.unsqueeze(-1) * all_messages).sum(dim=1).sum(dim=1)  # (V, msg_dim)
 
-        # Current state encoding
-        current_feat = torch.cat([dynamic_frames[0], reference_frames[0]], dim=-1)
+        # Current state encoding with physics-informed features
+        rel_disp_curr = dynamic_frames[0] - ref_curr
+        ref_vel_curr = reference_frames[0] - ref_curr
+        km_ratio = stiffness / (mass + 1e-8)
+        current_feat = torch.cat([rel_disp_curr, ref_vel_curr, stiffness, mass, km_ratio], dim=-1)
         h_current = self.current_encoder(current_feat)  # (V, msg_dim)
 
         # Dynamics update
@@ -432,7 +513,7 @@ class PhysicsLoss(nn.Module):
     of each term.
     """
 
-    def __init__(self, gravity=9.81, w_inertia=1.0, w_gravity=0.01, w_strain=1.0):
+    def __init__(self, gravity=9.81, w_inertia=1.0, w_gravity=0.0, w_strain=1.0):
         super().__init__()
         self.gravity = gravity
         self.w_inertia = w_inertia
